@@ -102,7 +102,7 @@ async def start_web_server():
     await site.start()
 
 # বটের ইভেন্ট লুপের সাথে ওয়েব সার্ভার রান করা
-loop = asyncio.get_event_loop()
+loop = bot.loop
 loop.create_task(start_web_server())
 # --------------------------------------
 
