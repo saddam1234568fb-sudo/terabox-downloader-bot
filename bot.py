@@ -26,20 +26,21 @@ async def start_cmd(m: Message):
     user_id = m.sender_id
     db.sadd("all_users", user_id) # ইউজার কাউন্ট করার জন্য
     
-    force_link = get_setting("force_link", "https://t.me/RoldexVerse")
-    if force_link != "none":
-        channel_username = force_link.replace("https://t.me/", "@")
+    # --- Force Subscribe Check ---
+    force_link = get_setting("force_link", "none")
+    if force_link.lower() != "none" and "t.me/" in force_link:
+        channel_username = force_link.replace("https://t.me/", "@").split("?")[0]
         check_if = await is_user_on_chat(bot, channel_username, user_id)
         if not check_if:
             return await m.reply(
                 "⚠️ **Please join our channel to use this bot!**\nবটটি ব্যবহার করতে অনুগ্রহ করে আমাদের চ্যানেলে জয়েন করুন।",
                 buttons=[
-                    [Button.url("📢 Join Channel", url=force_link)],
-                    [Button.url("🔄 Check Again", url=f"https://t.me/{BOT_USERNAME}?start=start")]
+                    [Button.url("📢 Join Channel / জয়েন করুন", url=force_link)],
+                    [Button.url("🔄 Check Again / চেক করুন", url=f"https://t.me/{BOT_USERNAME}?start=start")]
                 ]
             )
 
-    # Welcome Message
+    # --- Welcome Message ---
     default_welcome = "👋 **Welcome / স্বাগতম!**\n\nSend me any video link from YouTube, Facebook, TikTok, Terabox etc. and I will download it for you!\n\nযেকোনো ভিডিওর লিংক দিন, আমি ডাউনলোড করে দিব।"
     welcome_msg = get_setting("welcome_msg", default_welcome)
     support_link = get_setting("support_link", "https://t.me/ItsSaddam9")
@@ -140,30 +141,47 @@ async def admin_panel(m: Message):
     
     text = f"🛠 **অ্যাডমিন প্যানেল**\n\n👥 Total Users: {total_users}\n"
     buttons = [
-        [Button.inline("⚙️ Settings (Number/Price/Links)", data="admin_settings")],
-        [Button.inline("📢 Broadcast", data="admin_broadcast")],
-        [Button.inline("👑 VIP Members List", data="admin_vip_list")]
+        [Button.inline("⚙️ Settings (Number/Links)", data="admin_settings"), Button.inline("💰 Set Prices", data="admin_prices")],
+        [Button.inline("📢 Broadcast", data="admin_broadcast")]
     ]
     await m.reply(text, buttons=buttons)
 
-@bot.on(events.CallbackQuery(pattern="admin_settings", from_users=[ADMIN_ID]))
+@bot.on(events.CallbackQuery(pattern="admin_settings", func=lambda e: e.sender_id == ADMIN_ID))
 async def admin_settings(e):
     text = "⚙️ **Settings / সেটিংস:**\nWhat do you want to change?"
     buttons = [
-        [Button.inline("🔴 bKash", data="set_bkash_num"), Button.inline("🟠 Nagad", data="set_nagad_num")],
-        [Button.inline("🟣 Rocket", data="set_rocket_num"), Button.inline("🟡 Binance", data="set_binance_num")],
-        [Button.inline("💰 Change Prices", data="set_prices"), Button.inline("📝 Welcome Msg", data="set_welcome_msg")],
+        [Button.inline("🔴 bKash Num", data="set_bkash_num"), Button.inline("🟠 Nagad Num", data="set_nagad_num")],
+        [Button.inline("🟣 Rocket Num", data="set_rocket_num"), Button.inline("🟡 Binance ID", data="set_binance_num")],
         [Button.inline("📢 Force Sub Link", data="set_force_link"), Button.inline("📞 Support Link", data="set_support_link")],
+        [Button.inline("📝 Welcome Msg", data="set_welcome_msg")],
+        [Button.inline("🔙 Back", data="back_admin")]
+    ]
+    await e.edit(text, buttons=buttons)
+
+@bot.on(events.CallbackQuery(pattern="admin_prices", func=lambda e: e.sender_id == ADMIN_ID))
+async def admin_prices(e):
+    text = "💰 **Set Prices / প্যাকেজ প্রাইস সেট করুন:**"
+    buttons = [
+        [Button.inline("💵 1 Month Price", data="set_price_1")],
+        [Button.inline("💵 3 Months Price", data="set_price_3")],
+        [Button.inline("💵 Lifetime Price", data="set_price_life")],
         [Button.inline("🔙 Back", data="back_admin")]
     ]
     await e.edit(text, buttons=buttons)
 
 # Settings Handlers (Dynamic Input via Redis State)
-@bot.on(events.CallbackQuery(pattern=b"set_", from_users=[ADMIN_ID]))
+@bot.on(events.CallbackQuery(pattern=b"set_", func=lambda e: e.sender_id == ADMIN_ID))
 async def ask_setting_input(e):
     setting_key = e.data.decode().replace("set_", "")
     db.set(f"adminstate_{e.sender_id}", setting_key)
-    await e.reply(f"✍️ Please send the new value for **{setting_key}**:\n(Send /cancel to cancel)")
+    
+    extra_msg = ""
+    if setting_key == "force_link":
+        extra_msg = "\n(চ্যানেলের লিংক দিন, যেমন: https://t.me/yourchannel)\n(বন্ধ করতে চাইলে 'none' লিখে পাঠান)"
+    elif setting_key == "support_link":
+        extra_msg = "\n(আপনার সাপোর্ট আইডি বা গ্রুপের লিংক দিন)"
+        
+    await e.reply(f"✍️ Please send the new value for **{setting_key}**:{extra_msg}\n(Send /cancel to cancel)")
 
 @bot.on(events.NewMessage(incoming=True, from_users=[ADMIN_ID]))
 async def save_admin_input(m: Message):
@@ -178,7 +196,7 @@ async def save_admin_input(m: Message):
         await m.reply(f"✅ Successfully updated **{state}** to:\n{m.text}")
 
 # ================= 5. ADMIN APPROVE/REJECT =================
-@bot.on(events.CallbackQuery(pattern=b"approve_", from_users=[ADMIN_ID]))
+@bot.on(events.CallbackQuery(pattern=b"approve_", func=lambda e: e.sender_id == ADMIN_ID))
 async def approve_payment(e):
     data = e.data.decode().split("_")
     user_id = int(data[1])
@@ -198,7 +216,7 @@ async def approve_payment(e):
     except:
         pass
 
-@bot.on(events.CallbackQuery(pattern=b"reject_", from_users=[ADMIN_ID]))
+@bot.on(events.CallbackQuery(pattern=b"reject_", func=lambda e: e.sender_id == ADMIN_ID))
 async def reject_payment(e):
     user_id = int(e.data.decode().split("_")[1])
     await e.edit(f"❌ Rejected User `{user_id}`.")
@@ -207,12 +225,12 @@ async def reject_payment(e):
     except:
         pass
 
-@bot.on(events.CallbackQuery(pattern="back_admin", from_users=[ADMIN_ID]))
+@bot.on(events.CallbackQuery(pattern="back_admin", func=lambda e: e.sender_id == ADMIN_ID))
 async def back_to_admin(e):
     await admin_panel(e)
 
 # ================= 6. BROADCAST SYSTEM =================
-@bot.on(events.CallbackQuery(pattern="admin_broadcast", from_users=[ADMIN_ID]))
+@bot.on(events.CallbackQuery(pattern="admin_broadcast", func=lambda e: e.sender_id == ADMIN_ID))
 async def ask_broadcast(e):
     db.set(f"adminstate_{e.sender_id}", "broadcast")
     await e.reply("📢 Send the message or media you want to broadcast to all users:\n(Send /cancel to abort)")
