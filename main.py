@@ -10,8 +10,11 @@ from telethon import Button
 from telethon.sync import TelegramClient, events
 from telethon.tl.custom.message import Message
 
+# আপনার অরিজিনাল ফাইল থেকে ইমপোর্ট করা হলো
 from config import ADMINS, API_HASH, API_ID, BOT_TOKEN
 from redis_db import db
+from send_media import VideoSender
+from terabox import get_data
 
 bot = TelegramClient("main", API_ID, API_HASH)
 log = logging.getLogger(__name__)
@@ -38,34 +41,29 @@ def extract_url(text):
     match = url_pattern.search(text)
     return match.group(1) if match else None
 
-# সুপার আনশর্টনার (যেকোনো সর্ট লিংকের ভেতরের আসল লিংক বের করবে)
+# সুপার আনশর্টনার (সর্ট লিংক থেকে আসল লিংক বের করবে)
 def get_real_url(url):
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
-        }
-        # allow_redirects=True দিলে লিংক যতবারই রিডাইরেক্ট হোক, আসল লিংক বের করে আনবে
-        response = requests.get(url, headers=headers, allow_redirects=True, timeout=10)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'}
+        response = requests.head(url, headers=headers, allow_redirects=True, timeout=10)
         return response.url
     except Exception:
         return url
 
-# প্রফেশনাল টেলিগ্রাম প্রগ্রেস বার (১-১০০%)
+# প্রফেশনাল টেলিগ্রাম প্রগ্রেস বার (শুধুমাত্র TikTok/YT এর জন্য, Terabox এর নিজস্ব বার আছে)
 last_update_time = {}
 
 async def progress_bar(current, total, msg, start_time, msg_id):
     global last_update_time
     now = time.time()
     
-    # টেলিগ্রাম স্প্যাম ফিল্টারে যেন না পড়ে তাই ২.৫ সেকেন্ড পর পর আপডেট হবে
     if msg_id in last_update_time and (now - last_update_time[msg_id]) < 2.5 and current < total:
         return
-
     last_update_time[msg_id] = now
     
     percent = (current / total) * 100 if total > 0 else 0
     filled = int(percent / 10)
-    bar = '▰' * filled + '▱' * (10 - filled) # সুন্দর বক্স ডিজাইন
+    bar = '▰' * filled + '▱' * (10 - filled)
     
     curr_mb = current / (1024 * 1024)
     total_mb = total / (1024 * 1024)
@@ -73,18 +71,16 @@ async def progress_bar(current, total, msg, start_time, msg_id):
     elapsed = now - start_time
     speed = curr_mb / elapsed if elapsed > 0 else 0
     eta_seconds = (total_mb - curr_mb) / speed if speed > 0 else 0
-    
     m, s = divmod(int(eta_seconds), 60)
     eta_str = f"{m:02d}:{s:02d}s"
     
     text = (
-        f"📤 **Uploading Video... / আপলোড হচ্ছে...**\n\n"
+        f"📤 **Uploading Video...**\n\n"
         f"[{bar}] **{percent:.1f}%**\n\n"
         f"📦 **Size:** `{curr_mb:.2f} MB / {total_mb:.2f} MB`\n"
         f"🚀 **Speed:** `{speed:.2f} MB/s`\n"
         f"⏳ **Time Left:** `{eta_str}`"
     )
-    
     try:
         await msg.edit(text)
     except Exception:
@@ -117,31 +113,38 @@ async def get_message(m: Message):
         db.expire(usage_key, 86400)
 
     try:
-        terabox_domains = ["terabox", "1024tera", "4funbox", "mirrobox", "nephobox", "momerybox", "tibibox", "freeterabox", "terasharefile", "terafileshare"]
+        terabox_domains = ["terabox", "1024tera", "4funbox", "mirrobox", "nephobox", "momerybox", "tibibox", "freeterabox", "terasharefile", "terafileshare", "teraboxapp"]
         
         if any(domain in url.lower() for domain in terabox_domains):
-            await hm.edit("⏳ **Downloading from Terabox...**")
-            api_url = f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={url}"
-            resp = requests.get(api_url).json()
+            # ==============================================
+            # আপনার অরিজিনাল Terabox ও FastTelethon সিস্টেম
+            # ==============================================
+            try:
+                data = get_data(url)
+            except Exception:
+                return await hm.edit("❌ Sorry! Terabox API is dead or maybe your link is broken.")
             
-            if "response" not in resp or not resp["response"]:
-                return await hm.edit("❌ **Failed!** Terabox এর এই লিংকটি বর্তমানে কাজ করছে না বা ফাইলটি ডিলিট হয়ে গেছে।")
-            
-            download_url = resp["response"][0]["resolutions"]["Fast Download"]
-            file_name = f"downloads/Terabox_{m.sender_id}.mp4"
-            
-            if not os.path.exists("downloads"):
-                os.makedirs("downloads")
+            if not data:
+                return await hm.edit("❌ Sorry! Terabox API is dead or maybe your link is broken.")
+                
+            # ৫শ এমবি ফাইলের সাইজ লিমিট (ফ্রি ইউজারদের জন্য)
+            if data.get("sizebytes") and int(data["sizebytes"]) > 524288000 and m.sender_id not in ADMINS and not is_vip:
+                return await hm.edit(f"⚠️ **File is too big!**\nফ্রি ইউজাররা সর্বোচ্চ 500MB ডাউনলোড করতে পারবেন।\nDirect Link: {data['direct_link']}")
 
-            r = requests.get(download_url, stream=True)
-            with open(file_name, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=1024*1024):
-                    if chunk: f.write(chunk)
-            
-            file_path = file_name
-            title = "Terabox Video"
+            # আপনার send_media.py এর VideoSender কল করা হলো
+            sender = VideoSender(
+                client=bot,
+                data=data,
+                message=m,
+                edit_message=hm,
+                url=url,
+            )
+            asyncio.create_task(sender.send_video())
             
         else:
+            # ==============================================
+            # YouTube, FB, TikTok, IG এর জন্য (All in One)
+            # ==============================================
             await hm.edit("📥 **Downloading Video to Server...**\nসার্ভারে ভিডিও ডাউনলোড হচ্ছে...")
             if not os.path.exists("downloads"):
                 os.makedirs("downloads")
@@ -163,25 +166,25 @@ async def get_message(m: Message):
                 file_path = ydl.prepare_filename(info)
                 title = info.get('title', 'Downloaded Video')
 
-        # অডিও ডাউনলোডের জন্য লিংকটি Redis এ সেভ করা (২৪ ঘণ্টার জন্য)
-        db.set(f"aud_{m.id}", url, ex=86400)
-        btn = [[Button.inline("🎧 Download Audio (MP3)", data=f"audio_{m.id}")]]
+            # অডিও ডাউনলোডের জন্য লিংকটি Redis এ সেভ করা (২৪ ঘণ্টার জন্য)
+            db.set(f"aud_{m.id}", url, ex=86400)
+            btn = [[Button.inline("🎧 Download Audio (MP3)", data=f"audio_{m.id}")]]
 
-        start_time = time.time()
-        
-        # টেলিগ্রামে পাঠানো এবং লাইভ প্রগ্রেস বার দেখানো
-        await bot.send_file(
-            m.chat_id,
-            file=file_path,
-            caption=f"🎬 **{title}**\n\n📥 Downloaded via VIP Bot",
-            reply_to=m.id,
-            buttons=btn,
-            progress_callback=lambda curr, tot: bot.loop.create_task(progress_bar(curr, tot, hm, start_time, hm.id))
-        )
-        
-        await hm.delete()
-        if os.path.exists(file_path):
-            os.remove(file_path)
+            start_time = time.time()
+            
+            # টেলিগ্রামে পাঠানো এবং লাইভ প্রগ্রেস বার দেখানো
+            await bot.send_file(
+                m.chat_id,
+                file=file_path,
+                caption=f"🎬 **{title}**\n\n📥 Downloaded via VIP Bot",
+                reply_to=m.id,
+                buttons=btn,
+                progress_callback=lambda curr, tot: bot.loop.create_task(progress_bar(curr, tot, hm, start_time, hm.id))
+            )
+            
+            await hm.delete()
+            if os.path.exists(file_path):
+                os.remove(file_path)
 
     except Exception as e:
         await hm.edit(f"❌ **Failed!**\nভিডিওটি ডাউনলোড করা যায়নি। লিংকটি হয়তো প্রাইভেট বা ভুল।\n`{str(e)[:50]}`")
@@ -205,19 +208,14 @@ async def extract_audio(e):
             os.makedirs("downloads")
 
         ydl_opts = {
-            'format': 'bestaudio/best',
+            'format': 'bestaudio[ext=m4a]/bestaudio/best',
             'outtmpl': f'downloads/audio_{e.sender_id}_%(id)s.%(ext)s',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
             'quiet': True,
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            audio_path = f"downloads/audio_{e.sender_id}_{info['id']}.mp3"
+            audio_path = ydl.prepare_filename(info)
 
         start_time = time.time()
         await bot.send_file(
