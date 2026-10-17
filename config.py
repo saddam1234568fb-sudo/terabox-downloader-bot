@@ -12,10 +12,10 @@ HOST = parsed.hostname or "localhost"
 PORT = parsed.port or 6379
 PASSWORD = parsed.password or ""
 
-PRIVATE_CHAT_ID = int(os.environ.get("PRIVATE_CHAT_ID", "-1001234567890")) 
+PRIVATE_CHAT_ID = int(os.environ.get("PRIVATE_CHAT_ID", "-1003727502527) 
 COOKIE = os.environ.get("COOKIE", "")
-ADMINS = [int(x) for x in os.environ.get("ADMINS", "1317173146").split(",")]
+ADMINS = [int(x) for x in os.environ.get("ADMINS", "8868874895").split(",")]
 
-BOT_USERNAME = os.environ.get("BOT_USERNAME", "teraboxdown_bot")
-FORCE_LINK = os.environ.get("FORCE_LINK", "@RoldexVerse")
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "all_in_on_downloader_bd_pro_bot)
+FORCE_LINK = os.environ.get("FORCE_LINK", "@all_in_on_downloader_bd_pro_bot)
 PUBLIC_EARN_API = os.environ.get("PUBLIC_EARN_API", "")
