@@ -16,7 +16,7 @@ from terabox import get_data
 bot = TelegramClient("main", API_ID, API_HASH)
 log = logging.getLogger(__name__)
 
-# যেকোনো লিংক বের করার জেনেরিক ফাংশন (Terabox এর লিমিটেশন বাইপাস)
+# যেকোনো লিংক বের করার জেনেরিক ফাংশন
 def extract_url(text):
     url_pattern = re.compile(r'(https?://[^\s]+)')
     match = url_pattern.search(text)
@@ -52,7 +52,7 @@ async def get_message(m: Message):
 
     hm = await m.reply("⏳ **Processing your link... Please wait.**\nভিডিওটি প্রসেস করা হচ্ছে, দয়া করে অপেক্ষা করুন...")
 
-    # ৩. VIP ও Daily Limit চেক (ফ্রি ইউজাররা দিনে ৫টি ভিডিও নামাতে পারবে)
+    # ৩. VIP ও Daily Limit চেক
     is_vip = db.get(f"vip_{m.sender_id}")
     if not is_vip and m.sender_id not in ADMINS:
         today = time.strftime("%Y-%m-%d")
@@ -61,35 +61,49 @@ async def get_message(m: Message):
         if current_usage >= 5:
             return await hm.edit("⚠️ **Daily Limit Reached!**\n\nআপনি আজকের ৫টি ফ্রি ভিডিও ডাউনলোড করে ফেলেছেন। আনলিমিটেড ডাউনলোডের জন্য /start দিয়ে প্রিমিয়াম কিনুন।")
         db.incr(usage_key)
-        db.expire(usage_key, 86400) # ২৪ ঘণ্টা পর রিসেট হবে
+        db.expire(usage_key, 86400)
 
     # ৪. ডাউনলোড লজিক
     try:
-        if "terabox" in url.lower() or "1024tera" in url.lower() or "nephobox" in url.lower() or "mirrobox" in url.lower():
-            # Terabox এর জন্য আপনার আগের স্ক্রিপ্ট ব্যবহার হবে
+        # আপডেটেড Terabox ডোমেইন লিস্ট
+        terabox_domains = [
+            "terabox", "1024tera", "4funbox", "mirrobox", "nephobox", 
+            "momerybox", "tibibox", "freeterabox", "terasharefile", "terafileshare"
+        ]
+        
+        if any(domain in url.lower() for domain in terabox_domains):
+            # Terabox এর জন্য
             data = get_data(url)
             if not data:
-                return await hm.edit("❌ Sorry! Terabox API is dead or link is broken.")
+                return await hm.edit("❌ Sorry! Terabox API is temporarily down or link is broken.")
             
             sender = VideoSender(client=bot, data=data, message=m, edit_message=hm, url=url)
             asyncio.create_task(sender.send_video())
             
         else:
-            # YouTube, FB, TikTok, IG এর জন্য yt-dlp ব্যবহার হবে
+            # YouTube, FB, TikTok, IG এর জন্য
             await hm.edit("⏳ **Downloading using All-in-One Engine...**")
             
             if not os.path.exists("downloads"):
                 os.makedirs("downloads")
 
             file_path = ""
+            
+            # TikTok/Facebook বাইপাস করার জন্য হাই-সিকিউরিটি অপশন
             ydl_opts = {
                 'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
                 'outtmpl': f'downloads/{m.sender_id}_%(id)s.%(ext)s',
                 'quiet': True,
                 'no_warnings': True,
+                'nocheckcertificate': True,
+                'geo_bypass': True,
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-us,en;q=0.5',
+                }
             }
 
-            # ভিডিও ডাউনলোড করা
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 file_path = ydl.prepare_filename(info)
@@ -97,23 +111,20 @@ async def get_message(m: Message):
 
             await hm.edit("📤 **Uploading your video to Telegram...**\nটেলিগ্রামে ভিডিও আপলোড করা হচ্ছে...")
             
-            # টেলিগ্রামে পাঠানো
             await bot.send_file(
                 m.chat_id,
                 file=file_path,
-                caption=f"🎬 **{title}**\n\n📥 Downloaded via Premium Bot",
+                caption=f"🎬 **{title}**\n\n📥 Downloaded via VIP Bot",
                 reply_to=m.id
             )
             
             await hm.delete()
             
-            # মেমোরি ক্লিয়ার করার জন্য ডাউনলোড করা ফাইল ডিলিট করা
             if os.path.exists(file_path):
                 os.remove(file_path)
 
     except Exception as e:
-        await hm.edit(f"❌ **Failed!**\nভিডিওটি ডাউনলোড করা যায়নি। লিংকটি হয়তো প্রাইভেট বা ভুল।\n`{str(e)[:40]}`")
-        # এরর হলে ফাইল ডিলিট করা
+        await hm.edit(f"❌ **Failed!**\nভিডিওটি ডাউনলোড করা যায়নি। লিংকটি হয়তো প্রাইভেট বা ভুল।")
         if 'file_path' in locals() and os.path.exists(file_path):
             os.remove(file_path)
 
