@@ -1,3 +1,11 @@
+async def handle_message(m: Message):
+    # --- পেমেন্ট স্টেটে থাকলে ইগনোর করবে ---
+    if db.get(f"paystate_{m.sender_id}"):
+        return 
+    # ---------------------------------------
+    
+    url = get_urls_from_string(m.text)
+    # বাকি সব আগের মতই থাকবে...
 import asyncio
 import logging
 import time
