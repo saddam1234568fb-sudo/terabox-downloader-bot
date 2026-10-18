@@ -140,7 +140,6 @@ async def process_link(m: Message):
     hm = await m.reply("🔍 **Scanning Video Details... / তথ্য খোঁজা হচ্ছে...**")
 
     try:
-        # YouTube & FB Block Bypass settings
         ydl_opts = {
             'quiet': True, 
             'no_warnings': True, 
@@ -262,13 +261,13 @@ async def admin_panel(m):
     ]
     await m.reply(text, buttons=buttons)
 
-# Setup Limit & Force Sub
-@bot.on(events.CallbackQuery(pattern="admin_limit", from_users=[ADMIN_ID]))
+# Setup Limit & Force Sub (Bug Fixed: changed from_users to func)
+@bot.on(events.CallbackQuery(pattern="admin_limit", func=lambda e: e.sender_id == ADMIN_ID))
 async def admin_limit_setup(e):
     db.set(f"adminstate_{e.sender_id}", "daily_limit")
     await e.reply("⚙️ **Set Daily Limit:**\nলিমিট বন্ধ করতে `0` লিখে পাঠান।")
 
-@bot.on(events.CallbackQuery(pattern="admin_fs_setup", from_users=[ADMIN_ID]))
+@bot.on(events.CallbackQuery(pattern="admin_fs_setup", func=lambda e: e.sender_id == ADMIN_ID))
 async def admin_fs_setup(e):
     db.set(f"adminstate_{e.sender_id}", "fs_name")
     await e.reply("📢 **Force Sub Setup (Step 1/3):**\nপ্রথমে চ্যানেল/গ্রুপের **নাম** লিখুন। বন্ধ করতে `none` লিখুন।")
