@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 
 # ================= ডামি ওয়েব সার্ভার (Render) =================
 async def handle_ping(request):
-    return web.Response(text="Universal Downloader Bot is Running Perfectly!")
+    return web.Response(text="Ultimate Downloader Bot is Running Perfectly!")
 
 async def start_web_server():
     app_web = web.Application()
@@ -45,14 +45,17 @@ def extract_url(text):
     match = url_pattern.search(text)
     return match.group(1) if match else None
 
-# সুপার আনশর্টনার
+# সুপার আনশর্টনার (বাগ ফিক্স করা হয়েছে)
 def get_real_url(url):
-    try:
-        if "facebook.com/share" in url or "fb.watch" in url:
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-            response = requests.get(url, headers=headers, allow_redirects=True, timeout=10)
-            return response.url
+    # 🚨 FIX: এই ডোমেইনগুলোতে requests দিলে লগিন পেজে রিডাইরেক্ট করে, তাই এগুলো স্কিপ করা হলো।
+    skip_domains = ["facebook.com", "fb.watch", "youtube.com", "youtu.be", "tiktok.com", "instagram.com"]
+    if any(domain in url.lower() for domain in skip_domains):
         return url
+        
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.head(url, headers=headers, allow_redirects=True, timeout=5)
+        return response.url
     except Exception:
         return url
 
@@ -153,12 +156,17 @@ async def process_link(m: Message):
     real_url = get_real_url(url)
 
     try:
+        # 🚨 FIX: iOS Client & Custom Headers for Bypassing TikTok/YT Blocks
         ydl_opts = {
             'quiet': True, 
             'no_warnings': True, 
             'nocheckcertificate': True,
-            'force_ipv4': True, 
-            'extractor_args': {'youtube': {'player_client': ['android', 'web']}, 'tiktok': {'api_hostname': 'api16-normal-c-useast1a.tiktokv.com'}}
+            'geo_bypass': True, 
+            'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}},
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+            }
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -210,16 +218,18 @@ async def download_handler(e):
         file_path = ""
         base_opts = {
             'outtmpl': f'downloads/{e.sender_id}_%(id)s.%(ext)s',
-            'quiet': True, 'nocheckcertificate': True, 'force_ipv4': True,
-            'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'},
-            'extractor_args': {'youtube': {'player_client': ['android', 'web']}, 'tiktok': {'api_hostname': 'api16-normal-c-useast1a.tiktokv.com'}}
+            'quiet': True, 'nocheckcertificate': True, 'geo_bypass': True,
+            'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}},
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1'
+            }
         }
         
         if quality == "audio":
             base_opts['format'] = 'bestaudio/best'
             base_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}]
         elif quality == "thumb":
-            with yt_dlp.YoutubeDL(base_opts) as ydl:
+            with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
                 info = ydl.extract_info(url, download=False)
                 thumb_url = info.get('thumbnail')
             if thumb_url:
@@ -228,7 +238,7 @@ async def download_handler(e):
         elif quality == "max":
             base_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
         else:
-            base_opts['format'] = f'bestvideo[height<={quality}][ext=mp4]+bestaudio[ext=m4a]/best[height<={quality}][ext=mp4]/best'
+            base_opts['format'] = f'bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best'
 
         with yt_dlp.YoutubeDL(base_opts) as ydl:
             info = ydl.extract_info(url, download=True)
