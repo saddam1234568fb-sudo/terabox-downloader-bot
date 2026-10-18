@@ -10,7 +10,7 @@ from telethon import Button
 from telethon.sync import TelegramClient, events
 from telethon.tl.custom.message import Message
 
-# ================= Config & Database =================
+# Config
 API_ID = int(os.environ.get("API_ID", "123456"))
 API_HASH = os.environ.get("API_HASH", "your_api_hash")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "your_bot_token")
@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 
 # ================= ডামি ওয়েব সার্ভার (Render) =================
 async def handle_ping(request):
-    return web.Response(text="Ultimate Downloader Bot is Running Perfectly!")
+    return web.Response(text="Ultimate Downloader Bot is Running!")
 
 async def start_web_server():
     app_web = web.Application()
@@ -45,13 +45,10 @@ def extract_url(text):
     match = url_pattern.search(text)
     return match.group(1) if match else None
 
-# সুপার আনশর্টনার (বাগ ফিক্স করা হয়েছে)
 def get_real_url(url):
-    # 🚨 FIX: এই ডোমেইনগুলোতে requests দিলে লগিন পেজে রিডাইরেক্ট করে, তাই এগুলো স্কিপ করা হলো।
     skip_domains = ["facebook.com", "fb.watch", "youtube.com", "youtu.be", "tiktok.com", "instagram.com"]
     if any(domain in url.lower() for domain in skip_domains):
         return url
-        
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.head(url, headers=headers, allow_redirects=True, timeout=5)
@@ -79,15 +76,12 @@ last_update_time = {}
 async def progress_bar(current, total, msg, start_time, msg_id):
     global last_update_time
     now = time.time()
-    
-    if msg_id in last_update_time and (now - last_update_time[msg_id]) < 2.5 and current < total:
-        return
+    if msg_id in last_update_time and (now - last_update_time[msg_id]) < 2.5 and current < total: return
     last_update_time[msg_id] = now
     
     percent = (current / total) * 100 if total > 0 else 0
     filled = int(percent / 10)
     bar = '▰' * filled + '▱' * (10 - filled)
-    
     curr_mb = current / (1024 * 1024)
     total_mb = total / (1024 * 1024)
     elapsed = now - start_time
@@ -104,28 +98,18 @@ async def progress_bar(current, total, msg, start_time, msg_id):
 @bot.on(events.NewMessage(pattern="/start", incoming=True, func=lambda x: x.is_private))
 async def start_cmd(m: Message):
     user_id = m.sender_id
-    if db.get(f"banned_{user_id}"):
-        return await m.reply("🚫 **You are banned from using this bot.**")
+    if db.get(f"banned_{user_id}"): return await m.reply("🚫 **You are banned.**")
         
     if not await check_force_sub(user_id):
         fs_name = get_setting("fs_name", "Our Channel")
         fs_url = get_setting("fs_url", "https://t.me/")
-        return await m.reply(
-            f"⚠️ **Please join our channel first!**\nবটটি ব্যবহার করতে আগে আমাদের চ্যানেলে জয়েন করুন।",
-            buttons=[
-                [Button.url(f"📢 Join {fs_name}", url=fs_url)],
-                [Button.url("🔄 Check Again", url=f"https://t.me/{bot.me.username}?start=start")]
-            ]
-        )
+        return await m.reply(f"⚠️ **Please join our channel first!**", buttons=[[Button.url(f"📢 Join {fs_name}", url=fs_url)], [Button.url("🔄 Check Again", url=f"https://t.me/{bot.me.username}?start=start")]])
 
     await m.reply(
         "👋 **Welcome to Universal Downloader!**\n\n"
         "Send me any link from **YouTube, TikTok, Facebook, Instagram, Twitter** and I will download it for you.\n\n"
         "যেকোনো সোশ্যাল মিডিয়ার লিংক দিন, আমি ডাউনলোড করে দিব।",
-        buttons=[
-            [Button.inline("💎 VIP Premium", data="vip_menu")],
-            [Button.inline("📊 My Status", data="my_status")]
-        ]
+        buttons=[[Button.inline("💎 VIP Premium", data="vip_menu")], [Button.inline("📊 My Status", data="my_status")]]
     )
 
 # ================= মেইন লিংক প্রসেসর =================
@@ -133,21 +117,7 @@ async def start_cmd(m: Message):
 async def process_link(m: Message):
     user_id = m.sender_id
     if db.get(f"banned_{user_id}"): return
-    
-    if not await check_force_sub(user_id):
-        fs_name = get_setting("fs_name", "Our Channel")
-        fs_url = get_setting("fs_url", "https://t.me/")
-        return await m.reply(f"⚠️ **Join Required!**\nবট ব্যবহার করতে আগে আমাদের চ্যানেলে জয়েন করুন।", buttons=[[Button.url(f"📢 Join {fs_name}", url=fs_url)]])
-
-    is_vip = db.get(f"vip_{user_id}")
-    daily_limit = get_setting("daily_limit", "5")
-    if not is_vip and daily_limit != "0" and user_id != ADMIN_ID:
-        today = time.strftime("%Y-%m-%d")
-        usage_key = f"usage_{user_id}_{today}"
-        if int(db.get(usage_key) or 0) >= int(daily_limit):
-            return await m.reply("⚠️ **Daily Limit Reached!**\n\nআপনার আজকের ফ্রি লিমিট শেষ। আনলিমিটেড ডাউনলোডের জন্য ভিআইপি কিনুন।", buttons=[[Button.inline("💎 Buy VIP", data="vip_menu")]])
-        db.incr(usage_key)
-        db.expire(usage_key, 86400)
+    if not await check_force_sub(user_id): return await m.reply("⚠️ **Join Required!**")
 
     url = extract_url(m.text)
     if not url: return
@@ -156,33 +126,44 @@ async def process_link(m: Message):
     real_url = get_real_url(url)
 
     try:
-        # 🚨 FIX: iOS Client & Custom Headers for Bypassing TikTok/YT Blocks
-        ydl_opts = {
-            'quiet': True, 
-            'no_warnings': True, 
-            'nocheckcertificate': True,
-            'geo_bypass': True, 
-            'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}},
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+        # 🚨 FIX: TIKTOK API BYPASS (রেন্ডার সার্ভার ব্লক এড়াতে)
+        if "tiktok.com" in real_url.lower():
+            api_req = requests.get(f"https://www.tikwm.com/api/?url={real_url}", timeout=10).json()
+            if api_req.get("code") == 0:
+                data = api_req["data"]
+                title = data.get("title", "TikTok Video")
+                uploader = data.get("author", {}).get("nickname", "Unknown")
+                duration = str(data.get("duration", 0)) + " Sec"
+                thumb = data.get("cover")
+                
+                # ডাইরেক্ট ডাউনলোড লিংক Redis এ সেভ করা হলো
+                db.set(f"direct_vid_{m.id}", data.get("play"), ex=3600)
+                db.set(f"direct_aud_{m.id}", data.get("music"), ex=3600)
+                db.set(f"direct_thumb_{m.id}", thumb, ex=3600)
+                
+            else:
+                return await hm.edit("❌ **Failed!** টিকটক ভিডিওটি পাওয়া যায়নি।")
+
+        else:
+            # YouTube, FB, IG এর জন্য
+            ydl_opts = {
+                'quiet': True, 'no_warnings': True, 'nocheckcertificate': True,
+                'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}}
             }
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(real_url, download=False)
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(real_url, download=False)
             
-        title = info.get('title', 'Unknown Video')
-        duration = info.get('duration_string', 'Unknown')
-        uploader = info.get('uploader', 'Unknown Owner')
-        thumb = info.get('thumbnail', '')
-        
-        db.set(f"vidurl_{m.id}", real_url, ex=3600)
-        
+            title = info.get('title', 'Unknown Video')
+            duration = info.get('duration_string', 'Unknown')
+            uploader = info.get('uploader', 'Unknown Owner')
+            thumb = info.get('thumbnail', '')
+            db.set(f"vidurl_{m.id}", real_url, ex=3600)
+
+        # UI ব্যানার
         caption = (f"🎬 **Title:** `{title[:60]}...`\n"
                    f"👤 **Owner:** `{uploader}`\n"
                    f"⏱ **Duration:** `{duration}`\n\n"
-                   f"👇 **Select Download Quality / কোয়ালিটি বেছে নিন:**")
+                   f"👇 **Select Download Quality:**")
         
         buttons = [
             [Button.inline("🎥 360p", data=f"dl_{m.id}_360"), Button.inline("🎥 720p (HD)", data=f"dl_{m.id}_720")],
@@ -197,7 +178,7 @@ async def process_link(m: Message):
             await m.reply(caption, buttons=buttons)
 
     except Exception as e:
-        await hm.edit(f"❌ **Failed!**\nভিডিওটি পাওয়া যায়নি। লিংকটি হয়তো প্রাইভেট বা ভুল।\n`{str(e)[:50]}`")
+        await hm.edit(f"❌ **Failed!**\nলিংকটি হয়তো প্রাইভেট বা ভুল।\n`{str(e)[:50]}`")
 
 # ================= বাটনে ক্লিক করলে ডাউনলোড শুরু =================
 @bot.on(events.CallbackQuery(pattern=b"dl_"))
@@ -206,51 +187,79 @@ async def download_handler(e):
     msg_id = data[1]
     quality = data[2]
     
-    url = db.get(f"vidurl_{msg_id}")
-    if not url: return await e.answer("⚠️ Link Expired! Please send the link again.", alert=True)
+    # Check if it's a direct API link (TikTok) or yt-dlp link
+    direct_vid = db.get(f"direct_vid_{msg_id}")
+    yt_url = db.get(f"vidurl_{msg_id}")
+    
+    if not direct_vid and not yt_url:
+        return await e.answer("⚠️ Link Expired! Please send the link again.", alert=True)
     
     await e.answer("Downloading... Please wait!", alert=False)
     hm = await e.reply("⏳ **Downloading to Server... / সার্ভারে ডাউনলোড হচ্ছে...**")
     
     if not os.path.exists("downloads"): os.makedirs("downloads")
-    
+    file_path = f"downloads/{e.sender_id}_{msg_id}.mp4"
+    start_time = time.time()
+
     try:
-        file_path = ""
-        base_opts = {
-            'outtmpl': f'downloads/{e.sender_id}_%(id)s.%(ext)s',
-            'quiet': True, 'nocheckcertificate': True, 'geo_bypass': True,
-            'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}},
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1'
-            }
-        }
-        
-        if quality == "audio":
-            base_opts['format'] = 'bestaudio/best'
-            base_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}]
-        elif quality == "thumb":
-            with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
-                info = ydl.extract_info(url, download=False)
-                thumb_url = info.get('thumbnail')
-            if thumb_url:
-                await bot.send_file(e.chat_id, file=thumb_url, caption="🖼 **Thumbnail Downloaded**")
-            return await hm.delete()
-        elif quality == "max":
-            base_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+        # 🚨 TIKTOK DIRECT DOWNLOAD (No yt-dlp used)
+        if direct_vid:
+            if quality == "audio":
+                dl_url = db.get(f"direct_aud_{msg_id}")
+                file_path = file_path.replace(".mp4", ".mp3")
+            elif quality == "thumb":
+                dl_url = db.get(f"direct_thumb_{msg_id}")
+                await bot.send_file(e.chat_id, file=dl_url, caption="🖼 **Thumbnail Downloaded**")
+                return await hm.delete()
+            else:
+                dl_url = direct_vid
+
+            # Downloading file with requests
+            r = requests.get(dl_url, stream=True)
+            total_size = int(r.headers.get('content-length', 0))
+            downloaded = 0
+            
+            with open(file_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=1024*1024):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_size > 0:
+                            bot.loop.create_task(progress_bar(downloaded, total_size, hm, start_time, hm.id))
+            title = "TikTok Video"
+
+        # 🚨 YOUTUBE/FB DOWNLOAD (Using yt-dlp)
         else:
-            base_opts['format'] = f'bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best'
+            base_opts = {
+                'outtmpl': f'downloads/{e.sender_id}_%(id)s.%(ext)s',
+                'quiet': True, 'nocheckcertificate': True,
+                'extractor_args': {'youtube': {'player_client': ['ios', 'android', 'web']}}
+            }
+            if quality == "audio":
+                base_opts['format'] = 'bestaudio/best'
+                base_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}]
+            elif quality == "thumb":
+                with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+                    info = ydl.extract_info(yt_url, download=False)
+                await bot.send_file(e.chat_id, file=info.get('thumbnail'), caption="🖼 **Thumbnail Downloaded**")
+                return await hm.delete()
+            elif quality == "max":
+                base_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+            else:
+                base_opts['format'] = f'bestvideo[height<={quality}][ext=mp4]+bestaudio[ext=m4a]/best[height<={quality}][ext=mp4]/best'
 
-        with yt_dlp.YoutubeDL(base_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            file_path = ydl.prepare_filename(info)
-            if quality == "audio": file_path = file_path.rsplit('.', 1)[0] + '.mp3'
-            title = info.get('title', 'Video')
+            with yt_dlp.YoutubeDL(base_opts) as ydl:
+                info = ydl.extract_info(yt_url, download=True)
+                file_path = ydl.prepare_filename(info)
+                if quality == "audio": file_path = file_path.rsplit('.', 1)[0] + '.mp3'
+                title = info.get('title', 'Video')
 
+        # টেলিগ্রামে আপলোড
         start_time = time.time()
         await bot.send_file(
             e.chat_id,
             file=file_path,
-            caption=f"✅ **{title}**\n\n📥 Downloaded via Premium Bot",
+            caption=f"✅ **{title}**\n\n📥 Downloaded via VIP Bot",
             reply_to=e.message_id,
             progress_callback=lambda curr, tot: bot.loop.create_task(progress_bar(curr, tot, hm, start_time, hm.id))
         )
@@ -259,7 +268,7 @@ async def download_handler(e):
 
     except Exception as ex:
         await hm.edit(f"❌ **Download Failed!**\nভিডিওটি ডাউনলোড করা সম্ভব হয়নি। Error: `{str(ex)[:40]}`")
-        if 'file_path' in locals() and os.path.exists(file_path): os.remove(file_path)
+        if os.path.exists(file_path): os.remove(file_path)
 
 # ================= ADMIN SYSTEM =================
 @bot.on(events.NewMessage(pattern=r"/ban (\d+)", from_users=[ADMIN_ID]))
@@ -325,6 +334,5 @@ async def admin_state_handler(m: Message):
         db.delete(f"adminstate_{m.sender_id}")
         await m.reply(f"✅ Successfully updated **{state}** to: {m.text}")
 
-# ================= SERVER START =================
 bot.start(bot_token=BOT_TOKEN)
 bot.run_until_disconnected()
