@@ -3,25 +3,28 @@ import logging
 import time
 import os
 import re
-import requests
 from aiohttp import web
 import yt_dlp
 from telethon import Button
 from telethon.sync import TelegramClient, events
 from telethon.tl.custom.message import Message
 
-# আপনার অরিজিনাল ফাইল থেকে ইমপোর্ট করা হলো
-from config import ADMINS, API_HASH, API_ID, BOT_TOKEN
-from redis_db import db
-from send_media import VideoSender
-from terabox import get_data
+# Config
+API_ID = int(os.environ.get("API_ID", "123456"))
+API_HASH = os.environ.get("API_HASH", "your_api_hash")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "your_bot_token")
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "8868874895"))
 
-bot = TelegramClient("main", API_ID, API_HASH)
+import redis
+db = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+
+bot = TelegramClient("bot_session", API_ID, API_HASH)
 log = logging.getLogger(__name__)
 
 # ================= ডামি ওয়েব সার্ভার (Render) =================
 async def handle_ping(request):
-    return web.Response(text="All-in-One Bot is running beautifully!")
+    return web.Response(text="Social Media Downloader Bot is Running Perfectly!")
 
 async def start_web_server():
     app_web = web.Application()
@@ -41,18 +44,23 @@ def extract_url(text):
     match = url_pattern.search(text)
     return match.group(1) if match else None
 
-# সুপার আনশর্টনার (সর্ট লিংক থেকে আসল লিংক বের করবে)
-def get_real_url(url):
+def get_setting(key, default):
+    val = db.get(f"settings_{key}")
+    return val if val else default
+
+async def check_force_sub(user_id):
+    if user_id == ADMIN_ID: return True
+    fs_chat_id = get_setting("fs_chat_id", "none")
+    if fs_chat_id == "none" or not fs_chat_id.startswith("-"): return True
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'}
-        response = requests.head(url, headers=headers, allow_redirects=True, timeout=10)
-        return response.url
+        participant = await bot.get_permissions(int(fs_chat_id), user_id)
+        if participant.is_banned: return False
+        return True
     except Exception:
-        return url
+        return False
 
-# প্রফেশনাল টেলিগ্রাম প্রগ্রেস বার (শুধুমাত্র TikTok/YT এর জন্য, Terabox এর নিজস্ব বার আছে)
+# প্রগ্রেস বার
 last_update_time = {}
-
 async def progress_bar(current, total, msg, start_time, msg_id):
     global last_update_time
     now = time.time()
@@ -67,171 +75,232 @@ async def progress_bar(current, total, msg, start_time, msg_id):
     
     curr_mb = current / (1024 * 1024)
     total_mb = total / (1024 * 1024)
-    
     elapsed = now - start_time
     speed = curr_mb / elapsed if elapsed > 0 else 0
-    eta_seconds = (total_mb - curr_mb) / speed if speed > 0 else 0
-    m, s = divmod(int(eta_seconds), 60)
-    eta_str = f"{m:02d}:{s:02d}s"
     
-    text = (
-        f"📤 **Uploading Video...**\n\n"
-        f"[{bar}] **{percent:.1f}%**\n\n"
-        f"📦 **Size:** `{curr_mb:.2f} MB / {total_mb:.2f} MB`\n"
-        f"🚀 **Speed:** `{speed:.2f} MB/s`\n"
-        f"⏳ **Time Left:** `{eta_str}`"
+    text = (f"📤 **Uploading... / আপলোড হচ্ছে...**\n\n"
+            f"[{bar}] **{percent:.1f}%**\n\n"
+            f"📦 **Size:** `{curr_mb:.2f} MB / {total_mb:.2f} MB`\n"
+            f"🚀 **Speed:** `{speed:.2f} MB/s`")
+    try: await msg.edit(text)
+    except: pass
+
+# ================= START COMMAND =================
+@bot.on(events.NewMessage(pattern="/start", incoming=True, func=lambda x: x.is_private))
+async def start_cmd(m: Message):
+    user_id = m.sender_id
+    if db.get(f"banned_{user_id}"):
+        return await m.reply("🚫 **You are banned from using this bot.**")
+        
+    if not await check_force_sub(user_id):
+        fs_name = get_setting("fs_name", "Our Channel")
+        fs_url = get_setting("fs_url", "https://t.me/")
+        return await m.reply(
+            f"⚠️ **Please join our channel first!**\nবটটি ব্যবহার করতে আগে আমাদের চ্যানেলে জয়েন করুন।",
+            buttons=[
+                [Button.url(f"📢 Join {fs_name}", url=fs_url)],
+                [Button.url("🔄 Check Again", url=f"https://t.me/{bot.me.username}?start=start")]
+            ]
+        )
+
+    await m.reply(
+        "👋 **Welcome to Universal Downloader!**\n\n"
+        "Send me any link from **YouTube, TikTok, Facebook, Instagram, Twitter** and I will download it for you.\n\n"
+        "যেকোনো সোশ্যাল মিডিয়ার লিংক দিন, আমি ডাউনলোড করে দিব।",
+        buttons=[
+            [Button.inline("💎 VIP Premium", data="vip_menu")],
+            [Button.inline("📊 My Status", data="my_status")]
+        ]
     )
-    try:
-        await msg.edit(text)
-    except Exception:
-        pass
 
-# ================= মেইন ভিডিও ডাউনলোডার =================
+# ================= মেইন লিংক প্রসেসর =================
 @bot.on(events.NewMessage(incoming=True, func=lambda m: m.is_private and m.text and not m.text.startswith("/")))
-async def get_message(m: Message):
-    if db.get(f"paystate_{m.sender_id}"):
-        return
+async def process_link(m: Message):
+    user_id = m.sender_id
+    if db.get(f"banned_{user_id}"): return
+    
+    if not await check_force_sub(user_id):
+        fs_name = get_setting("fs_name", "Our Channel")
+        fs_url = get_setting("fs_url", "https://t.me/")
+        return await m.reply(f"⚠️ **Join Required!**\nবট ব্যবহার করতে আগে আমাদের চ্যানেলে জয়েন করুন।", buttons=[[Button.url(f"📢 Join {fs_name}", url=fs_url)]])
 
-    raw_url = extract_url(m.text)
-    if not raw_url:
-        return
-
-    hm = await m.reply("🔍 **Processing Link...**\nলিংক যাচাই করা হচ্ছে...")
-
-    # যেকোনো সর্ট লিংক থেকে আসল লিংক বের করা
-    url = get_real_url(raw_url)
-
-    # VIP ও Daily Limit চেক
-    is_vip = db.get(f"vip_{m.sender_id}")
-    if not is_vip and m.sender_id not in ADMINS:
+    is_vip = db.get(f"vip_{user_id}")
+    daily_limit = get_setting("daily_limit", "5")
+    if not is_vip and daily_limit != "0" and user_id != ADMIN_ID:
         today = time.strftime("%Y-%m-%d")
-        usage_key = f"usage_{m.sender_id}_{today}"
-        current_usage = int(db.get(usage_key) or 0)
-        if current_usage >= 5:
-            return await hm.edit("⚠️ **Daily Limit Reached!**\n\nআপনি আজকের ৫টি ফ্রি ভিডিও ডাউনলোড করে ফেলেছেন। আনলিমিটেড ডাউনলোডের জন্য /start দিয়ে প্রিমিয়াম কিনুন।")
+        usage_key = f"usage_{user_id}_{today}"
+        if int(db.get(usage_key) or 0) >= int(daily_limit):
+            return await m.reply("⚠️ **Daily Limit Reached!**\n\nআপনার আজকের ফ্রি লিমিট শেষ। আনলিমিটেড ডাউনলোডের জন্য ভিআইপি কিনুন।", buttons=[[Button.inline("💎 Buy VIP", data="vip_menu")]])
         db.incr(usage_key)
         db.expire(usage_key, 86400)
 
+    url = extract_url(m.text)
+    if not url: return
+
+    hm = await m.reply("🔍 **Scanning Video Details... / তথ্য খোঁজা হচ্ছে...**")
+
     try:
-        terabox_domains = ["terabox", "1024tera", "4funbox", "mirrobox", "nephobox", "momerybox", "tibibox", "freeterabox", "terasharefile", "terafileshare", "teraboxapp"]
+        # YouTube & FB Block Bypass settings
+        ydl_opts = {
+            'quiet': True, 
+            'no_warnings': True, 
+            'nocheckcertificate': True,
+            'force_ipv4': True, 
+            'extractor_args': {'youtube': {'player_client': ['android', 'web']}}
+        }
         
-        if any(domain in url.lower() for domain in terabox_domains):
-            # ==============================================
-            # আপনার অরিজিনাল Terabox ও FastTelethon সিস্টেম
-            # ==============================================
-            try:
-                data = get_data(url)
-            except Exception:
-                return await hm.edit("❌ Sorry! Terabox API is dead or maybe your link is broken.")
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
             
-            if not data:
-                return await hm.edit("❌ Sorry! Terabox API is dead or maybe your link is broken.")
-                
-            # ৫শ এমবি ফাইলের সাইজ লিমিট (ফ্রি ইউজারদের জন্য)
-            if data.get("sizebytes") and int(data["sizebytes"]) > 524288000 and m.sender_id not in ADMINS and not is_vip:
-                return await hm.edit(f"⚠️ **File is too big!**\nফ্রি ইউজাররা সর্বোচ্চ 500MB ডাউনলোড করতে পারবেন।\nDirect Link: {data['direct_link']}")
-
-            # আপনার send_media.py এর VideoSender কল করা হলো
-            sender = VideoSender(
-                client=bot,
-                data=data,
-                message=m,
-                edit_message=hm,
-                url=url,
-            )
-            asyncio.create_task(sender.send_video())
-            
+        title = info.get('title', 'Unknown Video')
+        duration = info.get('duration_string', 'Unknown')
+        uploader = info.get('uploader', 'Unknown Owner')
+        thumb = info.get('thumbnail', '')
+        
+        db.set(f"vidurl_{m.id}", url, ex=3600)
+        
+        caption = (f"🎬 **Title:** `{title[:60]}...`\n"
+                   f"👤 **Owner:** `{uploader}`\n"
+                   f"⏱ **Duration:** `{duration}`\n\n"
+                   f"👇 **Select Download Quality / কোয়ালিটি বেছে নিন:**")
+        
+        buttons = [
+            [Button.inline("🎥 360p", data=f"dl_{m.id}_360"), Button.inline("🎥 720p (HD)", data=f"dl_{m.id}_720")],
+            [Button.inline("🌟 1080p (FHD)", data=f"dl_{m.id}_1080"), Button.inline("🔥 4K / Max", data=f"dl_{m.id}_max")],
+            [Button.inline("🎧 Audio (MP3)", data=f"dl_{m.id}_audio"), Button.inline("🖼 Photo/Thumb", data=f"dl_{m.id}_thumb")]
+        ]
+        
+        await hm.delete()
+        if thumb:
+            await bot.send_file(m.chat_id, file=thumb, caption=caption, buttons=buttons, reply_to=m.id)
         else:
-            # ==============================================
-            # YouTube, FB, TikTok, IG এর জন্য (All in One)
-            # ==============================================
-            await hm.edit("📥 **Downloading Video to Server...**\nসার্ভারে ভিডিও ডাউনলোড হচ্ছে...")
-            if not os.path.exists("downloads"):
-                os.makedirs("downloads")
-
-            ydl_opts = {
-                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-                'outtmpl': f'downloads/{m.sender_id}_%(id)s.%(ext)s',
-                'quiet': True,
-                'no_warnings': True,
-                'nocheckcertificate': True,
-                'geo_bypass': True,
-                'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-                }
-            }
-
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                file_path = ydl.prepare_filename(info)
-                title = info.get('title', 'Downloaded Video')
-
-            # অডিও ডাউনলোডের জন্য লিংকটি Redis এ সেভ করা (২৪ ঘণ্টার জন্য)
-            db.set(f"aud_{m.id}", url, ex=86400)
-            btn = [[Button.inline("🎧 Download Audio (MP3)", data=f"audio_{m.id}")]]
-
-            start_time = time.time()
-            
-            # টেলিগ্রামে পাঠানো এবং লাইভ প্রগ্রেস বার দেখানো
-            await bot.send_file(
-                m.chat_id,
-                file=file_path,
-                caption=f"🎬 **{title}**\n\n📥 Downloaded via VIP Bot",
-                reply_to=m.id,
-                buttons=btn,
-                progress_callback=lambda curr, tot: bot.loop.create_task(progress_bar(curr, tot, hm, start_time, hm.id))
-            )
-            
-            await hm.delete()
-            if os.path.exists(file_path):
-                os.remove(file_path)
+            await m.reply(caption, buttons=buttons)
 
     except Exception as e:
-        await hm.edit(f"❌ **Failed!**\nভিডিওটি ডাউনলোড করা যায়নি। লিংকটি হয়তো প্রাইভেট বা ভুল।\n`{str(e)[:50]}`")
-        if 'file_path' in locals() and os.path.exists(file_path):
-            os.remove(file_path)
+        await hm.edit(f"❌ **Failed!**\nভিডিওটি পাওয়া যায়নি। লিংকটি হয়তো প্রাইভেট বা ভুল।\n`{str(e)[:50]}`")
 
-# ================= অডিও জেনারেটর বাটন =================
-@bot.on(events.CallbackQuery(pattern=b"audio_"))
-async def extract_audio(e):
-    msg_id = e.data.decode().split("_")[1]
-    url = db.get(f"aud_{msg_id}")
+# ================= বাটনে ক্লিক করলে ডাউনলোড শুরু =================
+@bot.on(events.CallbackQuery(pattern=b"dl_"))
+async def download_handler(e):
+    data = e.data.decode().split("_")
+    msg_id = data[1]
+    quality = data[2]
     
-    if not url:
-        return await e.answer("⚠️ লিংকটির মেয়াদ শেষ! দয়া করে ভিডিওর লিংকটি আবার দিন।", alert=True)
+    url = db.get(f"vidurl_{msg_id}")
+    if not url: return await e.answer("⚠️ Link Expired! Please send the link again.", alert=True)
     
-    await e.answer("অডিও জেনারেট হচ্ছে, দয়া করে অপেক্ষা করুন...", alert=False)
-    hm = await e.reply("🎧 **অডিও সার্ভারে ডাউনলোড হচ্ছে...**")
+    await e.answer("Downloading... Please wait!", alert=False)
+    hm = await e.reply("⏳ **Downloading to Server... / সার্ভারে ডাউনলোড হচ্ছে...**")
+    
+    if not os.path.exists("downloads"): os.makedirs("downloads")
     
     try:
-        if not os.path.exists("downloads"):
-            os.makedirs("downloads")
-
-        ydl_opts = {
-            'format': 'bestaudio[ext=m4a]/bestaudio/best',
-            'outtmpl': f'downloads/audio_{e.sender_id}_%(id)s.%(ext)s',
-            'quiet': True,
+        file_path = ""
+        base_opts = {
+            'outtmpl': f'downloads/{e.sender_id}_%(id)s.%(ext)s',
+            'quiet': True, 'nocheckcertificate': True, 'force_ipv4': True,
+            'extractor_args': {'youtube': {'player_client': ['android', 'web']}}
         }
+        
+        if quality == "audio":
+            base_opts['format'] = 'bestaudio/best'
+            base_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3'}]
+        elif quality == "thumb":
+            with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+                info = ydl.extract_info(url, download=False)
+                thumb_url = info.get('thumbnail')
+            await bot.send_file(e.chat_id, file=thumb_url, caption="🖼 **Thumbnail Downloaded**")
+            return await hm.delete()
+        elif quality == "max":
+            base_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+        else:
+            base_opts['format'] = f'bestvideo[height<={quality}][ext=mp4]+bestaudio[ext=m4a]/best[height<={quality}][ext=mp4]/best'
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL(base_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            audio_path = ydl.prepare_filename(info)
+            file_path = ydl.prepare_filename(info)
+            if quality == "audio": file_path = file_path.rsplit('.', 1)[0] + '.mp3'
+            title = info.get('title', 'Video')
 
         start_time = time.time()
         await bot.send_file(
             e.chat_id,
-            file=audio_path,
-            caption=f"🎵 **{info.get('title', 'Audio')}**\n\n🎧 Downloaded via VIP Bot",
-            reply_to=e.message.id,
+            file=file_path,
+            caption=f"✅ **{title}**\n\n📥 Downloaded via VIP Bot",
+            reply_to=e.message_id,
             progress_callback=lambda curr, tot: bot.loop.create_task(progress_bar(curr, tot, hm, start_time, hm.id))
         )
-        
         await hm.delete()
-        if os.path.exists(audio_path):
-            os.remove(audio_path)
+        if os.path.exists(file_path): os.remove(file_path)
 
     except Exception as ex:
-        await hm.edit(f"❌ **অডিও জেনারেট করতে সমস্যা হয়েছে!**\nহয়তো ভিডিওটিতে কোনো অডিও নেই।")
+        await hm.edit(f"❌ **Download Failed!**\nভিডিওটি ডাউনলোড করা সম্ভব হয়নি। Error: `{str(ex)[:30]}`")
+        if 'file_path' in locals() and os.path.exists(file_path): os.remove(file_path)
+
+# ================= ADMIN SYSTEM =================
+@bot.on(events.NewMessage(pattern=r"/ban (\d+)", from_users=[ADMIN_ID]))
+async def ban_user(m):
+    target = m.pattern_match.group(1)
+    db.set(f"banned_{target}", "1")
+    await m.reply(f"🚫 **User `{target}` BANNED.**")
+
+@bot.on(events.NewMessage(pattern=r"/unban (\d+)", from_users=[ADMIN_ID]))
+async def unban_user(m):
+    target = m.pattern_match.group(1)
+    db.delete(f"banned_{target}")
+    await m.reply(f"✅ **User `{target}` UNBANNED.**")
+
+@bot.on(events.NewMessage(pattern="/admin", from_users=[ADMIN_ID]))
+async def admin_panel(m):
+    limit = get_setting("daily_limit", "5")
+    limit_txt = "Unlimited" if limit == "0" else f"{limit} / day"
+    
+    text = (f"👑 **Ultimate Admin Panel**\n\n📊 **Daily Limit:** {limit_txt}\n\nCommands:\n`/ban userid` - ব্লক করুন\n`/unban userid` - আনব্লক করুন\n")
+    buttons = [
+        [Button.inline("📢 Setup Force Sub", data="admin_fs_setup")],
+        [Button.inline("⚙️ Set Daily Limit", data="admin_limit")],
+    ]
+    await m.reply(text, buttons=buttons)
+
+# Setup Limit & Force Sub
+@bot.on(events.CallbackQuery(pattern="admin_limit", from_users=[ADMIN_ID]))
+async def admin_limit_setup(e):
+    db.set(f"adminstate_{e.sender_id}", "daily_limit")
+    await e.reply("⚙️ **Set Daily Limit:**\nলিমিট বন্ধ করতে `0` লিখে পাঠান।")
+
+@bot.on(events.CallbackQuery(pattern="admin_fs_setup", from_users=[ADMIN_ID]))
+async def admin_fs_setup(e):
+    db.set(f"adminstate_{e.sender_id}", "fs_name")
+    await e.reply("📢 **Force Sub Setup (Step 1/3):**\nপ্রথমে চ্যানেল/গ্রুপের **নাম** লিখুন। বন্ধ করতে `none` লিখুন।")
+
+@bot.on(events.NewMessage(incoming=True, from_users=[ADMIN_ID]))
+async def admin_state_handler(m: Message):
+    state = db.get(f"adminstate_{m.sender_id}")
+    if not state: return
+    if m.text == "/cancel":
+        db.delete(f"adminstate_{m.sender_id}")
+        return await m.reply("❌ Cancelled.")
+
+    if state == "fs_name":
+        if m.text.lower() == "none":
+            db.set("settings_fs_chat_id", "none")
+            db.delete(f"adminstate_{m.sender_id}")
+            return await m.reply("✅ Force Subscribe Turned OFF.")
+        db.set("settings_fs_name", m.text)
+        db.set(f"adminstate_{m.sender_id}", "fs_url")
+        await m.reply("🔗 **Step 2/3:**\nএবার চ্যানেলের **Link (URL)** দিন:")
+    elif state == "fs_url":
+        db.set("settings_fs_url", m.text)
+        db.set(f"adminstate_{m.sender_id}", "fs_chat_id")
+        await m.reply("🆔 **Step 3/3:**\nসবশেষে চ্যানেলের **Chat ID** দিন (যেমন: -100123456789):")
+    elif state == "fs_chat_id":
+        db.set("settings_fs_chat_id", m.text)
+        db.delete(f"adminstate_{m.sender_id}")
+        await m.reply("✅ **Force Subscribe Successfully Set!**")
+    else:
+        db.set(f"settings_{state}", m.text)
+        db.delete(f"adminstate_{m.sender_id}")
+        await m.reply(f"✅ Successfully updated **{state}** to: {m.text}")
 
 bot.start(bot_token=BOT_TOKEN)
 bot.run_until_disconnected()
